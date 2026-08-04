@@ -1,0 +1,61 @@
+using UnityEngine;
+
+public class ButtonBehaviour : MonoBehaviour
+{
+    public event System.Action OnButtonActivated;
+    public event System.Action OnButtonPressed;
+
+
+    [Header("Visual")]
+    [SerializeField] private SpriteRenderer buttonSprite;
+    [SerializeField] private Material materialRed;
+    [SerializeField] private Material materialGreen;
+
+    private bool droneInRange = false;     
+    private bool assistDroneInRange = false;
+
+    private bool isActivated = false;
+
+    public void tryPress()
+    {
+        if (!droneInRange) return;
+        if(isActivated) return;
+
+        OnButtonPressed?.Invoke();
+    }
+
+   
+    public void SetActivated(bool activated)
+    {
+        isActivated = activated;
+        buttonSprite.material = activated ? materialGreen : materialRed;
+        if (activated)
+            OnButtonActivated?.Invoke();
+    }
+
+    void OnTriggerEnter2D(Collider2D collision)
+    {
+        if (collision.gameObject.CompareTag("Main_Drone"))
+        {
+            droneInRange = true;
+            collision.GetComponent<DroneMovement>()?.SetNearbyButton(this);
+        }
+
+        if (collision.gameObject.CompareTag("Assist_Drone"))
+        {
+            assistDroneInRange = true;
+            SetActivated(true);
+        }
+    }
+
+    void OnTriggerExit2D(Collider2D collision)
+    {
+        if (collision.gameObject.CompareTag("Main_Drone"))
+        {
+            droneInRange = false;
+            collision.GetComponent<DroneMovement>()?.SetNearbyButton(null);
+        }
+
+
+    }
+}

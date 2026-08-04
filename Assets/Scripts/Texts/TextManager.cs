@@ -1,0 +1,295 @@
+using System;
+using System.Collections;
+using System.IO;
+using TMPro;
+using UnityEngine;
+using UnityEngine.InputSystem;
+
+public class TextManager : MonoBehaviour
+{
+    public static TextManager Instance;
+
+#if UNITY_EDITOR
+[UnityEditor.InitializeOnLoadMethod]
+private static void ResetStaticInstance()
+{
+    UnityEditor.EditorApplication.playModeStateChanged += (state) =>
+    {
+        if (state == UnityEditor.PlayModeStateChange.ExitingPlayMode)
+        {
+            Instance = null;
+        }
+    };
+}
+#endif
+
+    [Header("UI")]
+    [SerializeField] private GameObject dialoguePanel;
+    [SerializeField] private TMP_Text dialogueText;
+
+    [Header("Continue Indicator")]
+    [SerializeField] private GameObject continueIndicator;   
+    [SerializeField] private float flickerInterval = 0.5f;   
+    private Coroutine flickerCoroutine;
+
+    [Header("Settings")]
+    [SerializeField] private float typingSpeed = 0.05f;
+    [SerializeField] private float panelOpenDelay = 0.5f;
+
+    [Header("Speaker Colors")]
+    [Tooltip("Map each speaker name (must match the 'speaker' field in the JSON) to a color.")]
+    [SerializeField] private SpeakerColor[] speakerColors;
+
+    [Tooltip("Used when a speaker name isn't found in the list above.")]
+    [SerializeField] private Color defaultSpeakerColor = Color.white;
+
+    [Serializable]
+    public struct SpeakerColor
+    {
+        public string speaker;
+        public Color  color;
+    }
+
+    public event Action OnDialogueEnded;
+
+    private MainDrone_Actions mainDrone_Actions;
+
+    private DialogueDatabase dialogueDatabase;
+    private Dialogue currentDialogue;
+
+    private int currentLine;
+
+    private bool isTyping;
+    private bool dialogueStarting;
+
+    private Coroutine typingCoroutine;
+
+    private void Awake()
+    {
+        if (Instance == null)
+        {
+            Instance = this;
+        }
+        else
+        {
+            Destroy(gameObject);
+            return;
+        }
+
+        mainDrone_Actions = new MainDrone_Actions();
+
+        LoadDialogueDatabase();
+
+        dialoguePanel.SetActive(false);
+
+        if (continueIndicator != null)
+            continueIndicator.SetActive(false);   
+    }
+
+    private void OnEnable()
+    {
+        if (mainDrone_Actions == null) return;
+
+        mainDrone_Actions.Drone.Enable();
+        mainDrone_Actions.Drone.Next_Text.performed += Next_Text_performed;
+    }
+
+    private void OnDisable()
+    {
+        if (mainDrone_Actions == null) return;
+
+        mainDrone_Actions.Drone.Next_Text.performed -= Next_Text_performed;
+        mainDrone_Actions.Drone.Disable();
+    }
+
+    private void LoadDialogueDatabase()
+    {
+        string path = Path.Combine(
+            Application.streamingAssetsPath,
+            "TextTrys.json"
+        );
+
+        if (!File.Exists(path))
+        {
+            Debug.LogError($"Dialogue file not found:\n{path}");
+            return;
+        }
+
+        string json = File.ReadAllText(path);
+
+        dialogueDatabase = JsonUtility.FromJson<DialogueDatabase>(json);
+    }
+
+    public void StartDialogue(string dialogueId)
+    {
+        currentDialogue = Array.Find(
+            dialogueDatabase.dialogues,
+            dialogue => dialogue.id == dialogueId
+        );
+
+        if (currentDialogue == null)
+        {
+            Debug.LogError(
+                $"Dialogue ID '{dialogueId}' not found."
+            );
+
+            return;
+        }
+
+        currentLine = 0;
+
+        ApplySpeakerColor(currentDialogue.speaker);
+
+        dialoguePanel.SetActive(true);
+
+        StartCoroutine(BeginDialogueAfterDelay());
+    }
+
+    private void ApplySpeakerColor(string speaker)
+    {
+        foreach (SpeakerColor entry in speakerColors)
+        {
+            if (entry.speaker == speaker)
+            {
+                dialogueText.color = entry.color;
+                return;
+            }
+        }
+
+        Debug.LogWarning($"[TextManager] No color set for speaker '{speaker}', using default.");
+        dialogueText.color = defaultSpeakerColor;
+    }
+
+    private IEnumerator BeginDialogueAfterDelay()
+    {
+        dialogueStarting = true;
+
+        dialogueText.text = "";
+        HideContinueIndicator();   
+
+        yield return new WaitForSeconds(panelOpenDelay);
+
+        dialogueStarting = false;
+
+        StartTypingCurrentLine();
+    }
+
+    private void Next_Text_performed(InputAction.CallbackContext context)
+    {
+        if (currentDialogue == null)
+            return;
+
+        if (dialogueStarting)
+            return;
+
+        if (isTyping)
+        {
+            StopCoroutine(typingCoroutine);
+
+            dialogueText.text =
+                currentDialogue.lines[currentLine];
+
+            isTyping = false;
+
+            ShowContinueIndicator();   
+
+            return;
+        }
+
+        currentLine++;
+
+        if (currentLine >= currentDialogue.lines.Length)
+        {
+            EndDialogue();
+            return;
+        }
+
+        StartTypingCurrentLine();
+    }
+
+    private void StartTypingCurrentLine()
+    {
+        if (typingCoroutine != null)
+        {
+            StopCoroutine(typingCoroutine);
+        }
+
+        HideContinueIndicator();  
+
+        typingCoroutine =
+            StartCoroutine(
+                TypeLine(
+                    currentDialogue.lines[currentLine]
+                )
+            );
+    }
+
+    private IEnumerator TypeLine(string line)
+    {
+        isTyping = true;
+
+        dialogueText.text = "";
+
+        foreach (char letter in line)
+        {
+            dialogueText.text += letter;
+
+            yield return new WaitForSeconds(
+                typingSpeed
+            );
+        }
+
+        isTyping = false;
+
+        ShowContinueIndicator();   
+    }
+
+    private void EndDialogue()
+    {
+        currentDialogue = null;
+        dialogueText.text = "";
+        dialoguePanel.SetActive(false);
+
+        HideContinueIndicator();   
+
+        OnDialogueEnded?.Invoke();
+    }
+
+    // ── Continue indicator flicker ──────────────────────────────────────
+    private void ShowContinueIndicator()
+    {
+        if (continueIndicator == null) return;
+
+        continueIndicator.SetActive(true);
+
+        if (flickerCoroutine != null)
+            StopCoroutine(flickerCoroutine);
+
+        flickerCoroutine = StartCoroutine(FlickerIndicator());
+    }
+
+    private void HideContinueIndicator()
+    {
+        if (continueIndicator == null) return;
+
+        if (flickerCoroutine != null)
+        {
+            StopCoroutine(flickerCoroutine);
+            flickerCoroutine = null;
+        }
+
+        continueIndicator.SetActive(false);
+    }
+
+    private IEnumerator FlickerIndicator()
+    {
+        while (true)
+        {
+            continueIndicator.SetActive(true);
+            yield return new WaitForSeconds(flickerInterval);
+
+            continueIndicator.SetActive(false);
+            yield return new WaitForSeconds(flickerInterval);
+        }
+    }
+}
