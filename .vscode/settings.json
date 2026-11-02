@@ -67,6 +67,6 @@
         "*.sln": "*.csproj",
         "*.slnx": "*.csproj"
     },
-    "dotnet.defaultSolution": "TFG Git.slnx",
+    "dotnet.defaultSolution": "Into-the-Depths.slnx",
     "dotnet.enableWorkspaceBasedDevelopment": false
 }

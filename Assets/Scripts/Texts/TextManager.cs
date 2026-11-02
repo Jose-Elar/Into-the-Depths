@@ -1,9 +1,10 @@
 using System;
-using System.Collections;
 using System.IO;
+using System.Collections;
 using TMPro;
 using UnityEngine;
 using UnityEngine.InputSystem;
+using UnityEngine.Networking;
 
 public class TextManager : MonoBehaviour
 {
@@ -61,6 +62,8 @@ private static void ResetStaticInstance()
 
     private bool isTyping;
     private bool dialogueStarting;
+    private bool databaseLoaded;
+    private string pendingDialogueId; // in case StartDialogue is called before load finishes
 
     private Coroutine typingCoroutine;
 
@@ -78,7 +81,7 @@ private static void ResetStaticInstance()
 
         mainDrone_Actions = new MainDrone_Actions();
 
-        LoadDialogueDatabase();
+        StartCoroutine(LoadDialogueDatabase());
 
         dialoguePanel.SetActive(false);
 
@@ -102,26 +105,46 @@ private static void ResetStaticInstance()
         mainDrone_Actions.Drone.Disable();
     }
 
-    private void LoadDialogueDatabase()
+    private IEnumerator LoadDialogueDatabase()
     {
         string path = Path.Combine(
             Application.streamingAssetsPath,
             "TextTrys.json"
         );
 
-        if (!File.Exists(path))
+        using (UnityWebRequest www = UnityWebRequest.Get(path))
         {
-            Debug.LogError($"Dialogue file not found:\n{path}");
-            return;
+            yield return www.SendWebRequest();
+
+            if (www.result != UnityWebRequest.Result.Success)
+            {
+                Debug.LogError($"Dialogue file not found or failed to load:\n{path}\n{www.error}");
+                yield break;
+            }
+
+            string json = www.downloadHandler.text;
+            dialogueDatabase = JsonUtility.FromJson<DialogueDatabase>(json);
+            databaseLoaded = true;
+
+            // If StartDialogue was called before the load finished run it now
+            if (!string.IsNullOrEmpty(pendingDialogueId))
+            {
+                string id = pendingDialogueId;
+                pendingDialogueId = null;
+                StartDialogue(id);
+            }
         }
-
-        string json = File.ReadAllText(path);
-
-        dialogueDatabase = JsonUtility.FromJson<DialogueDatabase>(json);
     }
 
     public void StartDialogue(string dialogueId)
     {
+        if (!databaseLoaded)
+        {
+            // Database isn't ready yet queue it and start once loaded
+            pendingDialogueId = dialogueId;
+            return;
+        }
+
         currentDialogue = Array.Find(
             dialogueDatabase.dialogues,
             dialogue => dialogue.id == dialogueId
@@ -255,7 +278,7 @@ private static void ResetStaticInstance()
         OnDialogueEnded?.Invoke();
     }
 
-    // ── Continue indicator flicker ──────────────────────────────────────
+    // Continue indicator flicker 
     private void ShowContinueIndicator()
     {
         if (continueIndicator == null) return;
